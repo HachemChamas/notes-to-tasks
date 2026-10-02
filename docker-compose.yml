@@ -1,0 +1,32 @@
+# Runs Postgres in a Docker container so you don't have to install it.
+#
+#   docker compose up -d     start the database in the background
+#   docker compose down      stop it (your data is kept in the volume)
+#   docker compose down -v   stop it AND delete all data
+#
+# The ${...} values come from the `.env` file next to this one.
+# `:?` makes Docker stop with an error message if the variable is missing.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+    ports:
+      # "<port on your computer>:<port inside the container>"
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # Store the data in a named volume so it survives restarts.
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      # Docker runs this every few seconds to check Postgres is ready.
+      # `$$` means "a literal $": the variable is read inside the container.
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  db-data:
