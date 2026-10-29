@@ -27,3 +27,7 @@ if not DATABASE_URL:
 # The frontend's address. Browsers block requests from other origins
 # unless the backend allows them (CORS), see app/main.py.
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+
+# Which Claude model extracts tasks. The API key itself is read by the
+# anthropic library straight from ANTHROPIC_API_KEY (see app/extractor.py).
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-opus-5-5")

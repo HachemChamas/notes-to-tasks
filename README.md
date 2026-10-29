@@ -1,53 +1,80 @@
 # notes-to-tasks
 
-AI agent that turns meeting notes and group chats into assigned tasks on a shared board.
+[![CI](https://github.com/HachemChamas/notes-to-tasks/actions/workflows/ci.yml/badge.svg)](https://github.com/HachemChamas/notes-to-tasks/actions/workflows/ci.yml)
 
-**Where the project is going:** a user pastes meeting notes or group chat
-messages, an AI agent extracts tasks with owners and due dates, the user
-approves them, and they appear on a shared task board.
+Paste meeting notes or a group chat. An AI agent finds the tasks, with owners
+and due dates. You review and approve them, and they appear on a shared task
+board.
 
-**What exists right now:** the skeleton. A FastAPI backend with a `/health`
-endpoint, a React page that calls it, and a Postgres database with a `users`
-table.
+![Reviewing the tasks the AI found](docs/review.png)
+![The shared task board](docs/board.png)
 
----
+## Features
 
-## Project layout
+- **AI task extraction.** Claude reads the notes and returns tasks as validated
+  JSON (structured outputs), so the app never has to parse free text.
+- **Real due dates.** "By Friday" becomes `2026-11-06`, worked out from the
+  meeting date you enter.
+- **Human in the loop.** Nothing reaches the board until you approve it. You
+  can edit titles, owners and dates, or untick suggestions you don't want.
+- **Shared board.** To do / In progress / Done columns, filter by person,
+  overdue highlighting, and tasks added by hand. The board refreshes every
+  15 seconds, so teammates see each other's changes.
+- **Owner matching.** "ada" and "Ada" become the same person, and the AI is
+  told who is already on the team.
+- **Tested and CI'd.** 23 backend and 16 frontend tests, plus a GitHub
+  Actions pipeline that also checks the migrations against real Postgres.
 
-```
-notes-to-tasks/
-├── .env.example          # every environment variable, with safe example values
-├── docker-compose.yml    # runs Postgres in Docker
-├── backend/              # Python API (FastAPI)
-│   ├── app/
-│   │   ├── main.py       # the API endpoints (/health, /users)
-│   │   ├── config.py     # reads settings from .env
-│   │   ├── database.py   # connection to Postgres
-│   │   ├── models.py     # database tables as Python classes
-│   │   └── schemas.py    # shape of the JSON the API returns
-│   ├── alembic/          # database migrations
-│   │   └── versions/0001_create_users_table.py
-│   ├── tests/            # backend tests (pytest)
-│   ├── alembic.ini
-│   ├── pytest.ini
-│   └── requirements.txt
-└── frontend/             # React app (Vite)
-    ├── index.html
-    ├── vite.config.js
-    └── src/
-        ├── main.jsx      # starts React
-        ├── App.jsx       # the page
-        ├── api.js        # calls to the backend
-        ├── App.css
-        ├── App.test.jsx  # frontend test (Vitest)
-        └── setupTests.js
-```
+## Tech stack
 
-## How the pieces talk to each other
+| Layer | Tools |
+| --- | --- |
+| Frontend | React 19, Vite, Vitest, React Testing Library |
+| Backend | Python, FastAPI, SQLAlchemy 2, Alembic, Pydantic |
+| Database | PostgreSQL 16 (Docker) |
+| AI | Claude API through the official `anthropic` Python SDK |
+| CI | GitHub Actions |
+
+## How it works
 
 ```
-Browser (React, port 5173)  --HTTP-->  Backend (FastAPI, port 8000)  --SQL-->  Postgres (Docker, port 5432)
+Browser (React, :5173)  --HTTP-->  FastAPI (:8000)  --SQL-->  Postgres (:5432)
+                                         |
+                                         +--HTTPS-->  Claude API
 ```
+
+1. **`POST /extract`.** The backend saves the note, then sends Claude the
+   text, the meeting date and the team's names, asking for JSON that matches a
+   Pydantic schema. The answer is cleaned up (blank titles dropped,
+   unreadable dates removed) and returned as *suggestions*.
+2. **Review.** The frontend shows the suggestions in an editable list.
+3. **`POST /tasks/bulk`.** The approved tasks are saved in one transaction.
+   Owners are found by name, or added.
+4. **Board.** `GET /tasks` and `PATCH /tasks/{id}` move cards between columns.
+
+A few design decisions:
+
+- **The AI is behind a FastAPI dependency** (`get_extractor`), so the tests
+  swap in a fake and never need network access or an API key.
+- **Errors are translated.** A rate limit, a bad key, or the model declining
+  each become a clear message in the UI, not a stack trace.
+- **Notes are treated as data.** The system prompt tells the model to ignore
+  instructions inside the pasted text (basic prompt-injection hygiene).
+
+## API
+
+Interactive docs are at http://localhost:8000/docs while the backend runs.
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| GET | `/health` | API and database status |
+| POST | `/extract` | Notes in, suggested tasks out (not saved as tasks) |
+| GET | `/tasks` | List tasks. Optional `?status=` and `?owner_id=` |
+| POST | `/tasks` | Add one task |
+| POST | `/tasks/bulk` | Save approved tasks |
+| PATCH | `/tasks/{id}` | Change some fields (status, owner, date…) |
+| DELETE | `/tasks/{id}` | Delete a task |
+| GET / POST | `/users` | List or add people |
 
 ---
 
@@ -62,7 +89,9 @@ Browser (React, port 5173)  --HTTP-->  Backend (FastAPI, port 8000)  --SQL-->  P
 | [Python](https://www.python.org/downloads/) | 3.11 or newer | `python3 --version` (Windows: `python --version`) |
 | [Node.js](https://nodejs.org/) | 24 LTS | `node --version` |
 
-Make sure Docker Desktop is **open and running** before step 2.
+You also need a **Claude API key** from https://platform.claude.com
+(Settings → API keys) for the extraction step. Everything else, including
+all the tests, works without one.
 
 ### 1. Get the code and create your `.env`
 
@@ -74,12 +103,13 @@ cp .env.example .env
 
 (Windows PowerShell: `Copy-Item .env.example .env`)
 
-Open `.env` and change `POSTGRES_PASSWORD`. Put the **same** password inside
-`DATABASE_URL`. `.env` is ignored by Git, so it never gets committed.
+Open `.env` and:
+- change `POSTGRES_PASSWORD`, and put the **same** password inside `DATABASE_URL`
+- paste your key after `ANTHROPIC_API_KEY=`
+
+`.env` is ignored by Git, so your password and key never get committed.
 
 ### 2. Start Postgres
-
-From the repo root:
 
 ```bash
 docker compose up -d
@@ -88,145 +118,117 @@ docker compose ps        # STATUS should say "healthy" after a few seconds
 
 ### 3. Start the backend
 
-Open a terminal in the `backend/` folder:
-
 ```bash
 cd backend
-
-# Create a virtual environment: a private folder of Python packages for this project.
 python3 -m venv .venv
-
-# Activate it (do this every time you open a new terminal):
-source .venv/bin/activate          # macOS / Linux
-# .venv\Scripts\Activate.ps1       # Windows PowerShell
-
-# Install the packages
+source .venv/bin/activate          # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-
-# Create the tables in the database (runs the migrations)
-alembic upgrade head
-
-# Start the API. --reload restarts it whenever you save a file.
-uvicorn app.main:app --reload
+alembic upgrade head               # create the tables
+uvicorn app.main:app --reload      # --reload restarts on every save
 ```
 
-Check it: open http://localhost:8000/health. You should see:
-
-```json
-{"status": "ok", "database": "ok"}
-```
-
-FastAPI also gives you interactive docs at http://localhost:8000/docs.
+Check it: http://localhost:8000/health should show
+`{"status": "ok", "database": "ok"}`.
 
 ### 4. Start the frontend
 
-Open a **second** terminal (keep the backend running) in the `frontend/` folder:
+In a **second** terminal:
 
 ```bash
 cd frontend
-npm install       # first time only, downloads packages into node_modules/
+npm install
 npm run dev
 ```
 
-### 5. Open the app
+### 5. Use it
 
-Go to http://localhost:5173. You should see **API: ok** and **Database: ok**.
+Open http://localhost:5173, click **Use an example**, then **Find tasks**.
 
 ### Stopping everything
 
-- Backend and frontend: press `Ctrl+C` in their terminals.
-- Postgres: `docker compose down` (your data is kept). Use `docker compose down -v` to also delete the data.
+- Backend and frontend: `Ctrl+C` in their terminals.
+- Postgres: `docker compose down` (data is kept), or `docker compose down -v` to delete it.
 
 ---
 
 ## Running the tests
 
-The tests don't need Docker or a running backend. They use fake versions
-of the database and the API.
+The tests need no Docker, no running servers and no API key. The backend
+uses an in-memory SQLite database and a fake AI; the frontend fakes the API.
 
 ```bash
-# Backend (in backend/, with the virtual environment activated)
-pytest
-
-# Frontend (in frontend/)
-npm test
+cd backend && pytest        # with the virtual environment activated
+cd frontend && npm test
 ```
 
-Right now the backend prints `1 passed, 1 skipped`. The skipped test is one
-of your TODOs (see below).
+## Project layout
 
----
-
-## Your TODOs
-
-Each TODO has a comment block in the code explaining what to do, with hints.
-Search the project for `TODO (` to find them.
-
-| # | Where | What |
-| --- | --- | --- |
-| 1 | `backend/app/main.py` (`list_users`) | Make `GET /users` return every user from the database, oldest first. |
-| 2 | `frontend/src/App.jsx` | Add a "Check again" button that re-runs the health check and is disabled while it runs. |
-| 3 | `backend/tests/test_health.py` | Write the test for when the database is down: `/health` should say `"database": "unavailable"`. |
-
-### Adding a test user (for TODO 1)
-
-`GET /users` returns an empty list `[]` until there are users. To add one:
-
-```bash
-# Open a Postgres shell inside the container (from the repo root).
-# Use the POSTGRES_USER and POSTGRES_DB values from your .env.
-docker compose exec db psql -U notes -d notes_to_tasks
+```
+notes-to-tasks/
+├── .env.example              # every setting, with safe example values
+├── docker-compose.yml        # Postgres
+├── .github/workflows/ci.yml  # tests + migration check on every push
+├── backend/
+│   ├── app/
+│   │   ├── main.py           # creates the app, CORS, /health
+│   │   ├── config.py         # reads settings from .env
+│   │   ├── database.py       # Postgres connection and sessions
+│   │   ├── models.py         # tables: users, notes, tasks
+│   │   ├── schemas.py        # JSON shapes the API accepts and returns
+│   │   ├── extractor.py      # the Claude call: prompt, schema, error handling
+│   │   └── routers/          # endpoints: extract.py, tasks.py, users.py
+│   ├── alembic/versions/     # migrations 0001 and 0002
+│   └── tests/
+└── frontend/src/
+    ├── App.jsx               # owns the data, wires the steps together
+    ├── api.js                # every call to the backend
+    ├── dates.js              # date formatting and "overdue"
+    └── components/           # HealthBadge, NotesForm, ReviewPanel, TaskBoard, TaskCard
 ```
 
-Then, at the `notes_to_tasks=#` prompt:
-
-```sql
-INSERT INTO users (email, name) VALUES ('ada@example.com', 'Ada');
-SELECT * FROM users;
-\q
-```
-
----
-
-## Database migrations, in short
-
-A migration is a script that changes the database's tables. They live in
-`backend/alembic/versions/`, and Alembic remembers which ones already ran.
+## Database migrations
 
 ```bash
 alembic upgrade head                      # apply all new migrations
 alembic downgrade -1                      # undo the last one
-alembic revision -m "add tasks table"     # create a new, empty migration file
+alembic revision -m "add comments table"  # create a new migration file
 ```
 
 When you change `app/models.py`, write a migration that makes the same change.
-
----
+`alembic check` (also run in CI) fails if the two disagree.
 
 ## Troubleshooting
 
 **`RuntimeError: DATABASE_URL is not set`**
-You don't have a `.env` file in the repo root. Do step 1 again.
+There is no `.env` file in the repo root. Do step 1 again.
+
+**"No Claude API key is set" when finding tasks**
+Put your key in `.env` as `ANTHROPIC_API_KEY=...` and restart the backend.
 
 **`/health` says `"database": "unavailable"`**
 Postgres isn't running, or `DATABASE_URL` doesn't match the `POSTGRES_*`
-values in `.env`. Run `docker compose ps` and compare the two. The backend
-terminal prints the exact error.
+values. Run `docker compose ps` and compare. The backend terminal prints the
+exact error.
 
-**`port is already allocated` / `address already in use` on 5432**
-You probably have Postgres installed outside Docker. Set `POSTGRES_PORT=5433`
-in `.env`, change the port in `DATABASE_URL` to `5433` too, then run
-`docker compose up -d` again.
+**`port is already allocated` on 5432**
+Set `POSTGRES_PORT=5433` in `.env`, change the port in `DATABASE_URL` to
+`5433` too, and run `docker compose up -d` again.
 
 **Changed the password in `.env` but Postgres still uses the old one?**
-Postgres only reads the password the very first time it creates its data.
-Run `docker compose down -v` (this deletes the data) and then `docker compose up -d`.
+Postgres only reads it when it first creates its data. Run
+`docker compose down -v` (deletes the data), then `docker compose up -d`.
 
 **The page says "Could not reach the backend"**
-The backend isn't running, or `VITE_API_URL` is wrong. After you change
-`.env`, restart `npm run dev`; Vite only reads `.env` when it starts.
+The backend isn't running, or `VITE_API_URL` is wrong. Restart `npm run dev`
+after changing `.env`.
 
-**The browser console shows a CORS error**
-`FRONTEND_ORIGIN` in `.env` must exactly match the address in your browser's
-address bar (for example `http://localhost:5173`). Restart the backend after
-changing it.
+**CORS error in the browser console**
+`FRONTEND_ORIGIN` must exactly match the address in your address bar.
+Restart the backend after changing it.
+
+## Ideas for next steps
+
+- Log in with accounts, and keep separate boards per team
+- Push updates over WebSockets instead of refreshing every 15 seconds
+- Drag and drop between columns
+- Deploy it (for example the backend on Render or Fly.io, the frontend on Vercel)

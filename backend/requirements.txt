@@ -15,6 +15,9 @@ alembic==1.20.0
 # Loads variables from the .env file into the environment
 python-dotenv==1.2.4
 
+# Official SDK for the Claude API (the AI that extracts tasks)
+anthropic==2.3.0
+
 # Testing: pytest runs the tests, httpx2 powers FastAPI's TestClient
 pytest==9.1.1
 httpx2==2.13.1
