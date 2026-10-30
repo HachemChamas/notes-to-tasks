@@ -1,4 +1,4 @@
-"""Tests for app/extractor.py, the part that talks to Claude."""
+"""Tests for the shared extraction code and the Claude provider."""
 
 import json
 from datetime import date
@@ -7,14 +7,8 @@ import anthropic
 import httpx2
 import pytest
 
-from app.extractor import (
-    AIResult,
-    AITask,
-    ExtractionError,
-    TaskExtractor,
-    build_prompt,
-    clean_tasks,
-)
+from app.claude_extractor import ClaudeExtractor
+from app.extractor import AIResult, AITask, ExtractionError, build_prompt, clean_tasks
 
 
 def test_prompt_includes_date_weekday_team_and_notes():
@@ -46,7 +40,7 @@ def test_clean_tasks_fixes_messy_ai_output():
 
 
 # ---------------------------------------------------------------------------
-# The tests below run the real TaskExtractor and the real anthropic SDK, but
+# The tests below run the real ClaudeExtractor and the real anthropic SDK, but
 # swap the network for a fake (MockTransport), so nothing leaves the machine.
 # They check that we send a sensible request and handle every kind of answer.
 # ---------------------------------------------------------------------------
@@ -82,7 +76,7 @@ def fake_claude(status_code=200, stop_reason="end_turn", answer=None, sent=None)
 def test_extract_sends_notes_and_parses_the_answer():
     sent = []
     answer = {"tasks": [{"title": "Send budget", "description": None, "owner_name": "Ada", "due_date": "2026-11-02"}]}
-    extractor = TaskExtractor(fake_claude(answer=answer, sent=sent), model="claude-opus-5-5")
+    extractor = ClaudeExtractor(fake_claude(answer=answer, sent=sent), model="claude-opus-5-5")
 
     tasks = extractor.extract("Ada sends the budget Monday", date(2026, 10, 29), ["Ada"])
 
@@ -96,7 +90,7 @@ def test_extract_sends_notes_and_parses_the_answer():
 
 
 def test_refusal_becomes_a_clear_error():
-    extractor = TaskExtractor(fake_claude(stop_reason="refusal"))
+    extractor = ClaudeExtractor(fake_claude(stop_reason="refusal"))
 
     with pytest.raises(ExtractionError) as error:
         extractor.extract("notes", date(2026, 10, 29), [])
@@ -106,7 +100,7 @@ def test_refusal_becomes_a_clear_error():
 
 @pytest.mark.parametrize("status_code, expected", [(401, 503), (429, 503), (500, 502)])
 def test_api_errors_become_clear_errors(status_code, expected):
-    extractor = TaskExtractor(fake_claude(status_code=status_code))
+    extractor = ClaudeExtractor(fake_claude(status_code=status_code))
 
     with pytest.raises(ExtractionError) as error:
         extractor.extract("notes", date(2026, 10, 29), [])
@@ -122,6 +116,6 @@ def test_missing_api_key_becomes_a_clear_error(monkeypatch):
     )
 
     with pytest.raises(ExtractionError) as error:
-        TaskExtractor(client).extract("notes", date(2026, 10, 29), [])
+        ClaudeExtractor(client).extract("notes", date(2026, 10, 29), [])
 
     assert "ANTHROPIC_API_KEY" in error.value.message

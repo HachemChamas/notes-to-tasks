@@ -11,8 +11,10 @@ board.
 
 ## Features
 
-- **AI task extraction.** Claude reads the notes and returns tasks as validated
-  JSON (structured outputs), so the app never has to parse free text.
+- **AI task extraction.** Gemini or Claude (your choice, one setting) reads
+  the notes and returns tasks as schema-validated JSON (structured output),
+  so the app never has to parse free text. If Gemini's main model is
+  overloaded, it automatically retries on a lighter model.
 - **Real due dates.** "By Friday" becomes `2026-11-06`, worked out from the
   meeting date you enter.
 - **Human in the loop.** Nothing reaches the board until you approve it. You
@@ -22,7 +24,7 @@ board.
   15 seconds, so teammates see each other's changes.
 - **Owner matching.** "ada" and "Ada" become the same person, and the AI is
   told who is already on the team.
-- **Tested and CI'd.** 23 backend and 16 frontend tests, plus a GitHub
+- **Tested and CI'd.** 36 backend and 16 frontend tests, plus a GitHub
   Actions pipeline that also checks the migrations against real Postgres.
 
 ## Tech stack
@@ -32,7 +34,7 @@ board.
 | Frontend | React 19, Vite, Vitest, React Testing Library |
 | Backend | Python, FastAPI, SQLAlchemy 2, Alembic, Pydantic |
 | Database | PostgreSQL 16 (Docker) |
-| AI | Claude API through the official `anthropic` Python SDK |
+| AI | Google Gemini (`google-genai`) or Claude (`anthropic`), behind one interface |
 | CI | GitHub Actions |
 
 ## How it works
@@ -40,10 +42,10 @@ board.
 ```
 Browser (React, :5173)  --HTTP-->  FastAPI (:8000)  --SQL-->  Postgres (:5432)
                                          |
-                                         +--HTTPS-->  Claude API
+                                         +--HTTPS-->  Gemini or Claude API
 ```
 
-1. **`POST /extract`.** The backend saves the note, then sends Claude the
+1. **`POST /extract`.** The backend saves the note, then sends the AI the
    text, the meeting date and the team's names, asking for JSON that matches a
    Pydantic schema. The answer is cleaned up (blank titles dropped,
    unreadable dates removed) and returned as *suggestions*.
@@ -54,10 +56,12 @@ Browser (React, :5173)  --HTTP-->  FastAPI (:8000)  --SQL-->  Postgres (:5432)
 
 A few design decisions:
 
-- **The AI is behind a FastAPI dependency** (`get_extractor`), so the tests
-  swap in a fake and never need network access or an API key.
-- **Errors are translated.** A rate limit, a bad key, or the model declining
-  each become a clear message in the UI, not a stack trace.
+- **The AI is behind one interface.** `ClaudeExtractor` and `GeminiExtractor`
+  share the prompt, schema and clean-up code; `AI_PROVIDER` picks one. It's
+  injected as a FastAPI dependency (`get_extractor`), so the tests swap in a
+  fake and never need network access or an API key.
+- **Errors are translated.** A rate limit, a bad key, a retired model or the
+  AI declining each become a clear message in the UI, not a stack trace.
 - **Notes are treated as data.** The system prompt tells the model to ignore
   instructions inside the pasted text (basic prompt-injection hygiene).
 
@@ -89,9 +93,10 @@ Interactive docs are at http://localhost:8000/docs while the backend runs.
 | [Python](https://www.python.org/downloads/) | 3.11 or newer | `python3 --version` (Windows: `python --version`) |
 | [Node.js](https://nodejs.org/) | 24 LTS | `node --version` |
 
-You also need a **Claude API key** from https://platform.claude.com
-(Settings → API keys) for the extraction step. Everything else, including
-all the tests, works without one.
+You also need an **AI key** for the extraction step. The easiest is a free
+**Gemini** key from https://aistudio.google.com/apikey. (A Claude key from
+https://platform.claude.com works too; set `AI_PROVIDER=claude`.) Everything
+else, including all the tests, works without one.
 
 ### 1. Get the code and create your `.env`
 
@@ -105,7 +110,7 @@ cp .env.example .env
 
 Open `.env` and:
 - change `POSTGRES_PASSWORD`, and put the **same** password inside `DATABASE_URL`
-- paste your key after `ANTHROPIC_API_KEY=`
+- paste your Gemini key after `GEMINI_API_KEY=`
 
 `.env` is ignored by Git, so your password and key never get committed.
 
@@ -175,7 +180,9 @@ notes-to-tasks/
 │   │   ├── database.py       # Postgres connection and sessions
 │   │   ├── models.py         # tables: users, notes, tasks
 │   │   ├── schemas.py        # JSON shapes the API accepts and returns
-│   │   ├── extractor.py      # the Claude call: prompt, schema, error handling
+│   │   ├── extractor.py      # shared AI prompt + schema, picks the provider
+│   │   ├── gemini_extractor.py  # Gemini call, fallback model, errors
+│   │   ├── claude_extractor.py  # Claude call, errors
 │   │   └── routers/          # endpoints: extract.py, tasks.py, users.py
 │   ├── alembic/versions/     # migrations 0001 and 0002
 │   └── tests/
@@ -202,8 +209,17 @@ When you change `app/models.py`, write a migration that makes the same change.
 **`RuntimeError: DATABASE_URL is not set`**
 There is no `.env` file in the repo root. Do step 1 again.
 
-**"No Claude API key is set" when finding tasks**
-Put your key in `.env` as `ANTHROPIC_API_KEY=...` and restart the backend.
+**"No Gemini API key is set" when finding tasks**
+Put your key in `.env` as `GEMINI_API_KEY=...` and restart the backend.
+
+**"Gemini's free-tier limit was reached" or "overloaded"**
+Google limits free requests per minute and per day. Wait a minute and try
+again.
+
+**"The Gemini model ... isn't available"**
+Google retired that model. Pick a current one from
+https://ai.google.dev/gemini-api/docs/models, set `GEMINI_MODEL` in `.env`,
+and restart the backend.
 
 **`/health` says `"database": "unavailable"`**
 Postgres isn't running, or `DATABASE_URL` doesn't match the `POSTGRES_*`

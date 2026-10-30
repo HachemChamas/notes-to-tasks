@@ -15,8 +15,10 @@ alembic==1.20.0
 # Loads variables from the .env file into the environment
 python-dotenv==1.2.4
 
-# Official SDK for the Claude API (the AI that extracts tasks)
-anthropic==2.3.0
+# AI that extracts tasks: pick one with AI_PROVIDER in .env
+anthropic==2.3.0      # Claude
+google-genai==2.34.0  # Gemini
+httpx==0.28.1         # used by google-genai; we catch its timeout errors
 
 # Testing: pytest runs the tests, httpx2 powers FastAPI's TestClient
 pytest==9.1.1
